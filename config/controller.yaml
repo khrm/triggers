@@ -45,6 +45,8 @@ spec:
         volumeMounts:
         - name: config-logging
           mountPath: /etc/config-logging
+        - name: config-eventlistener
+          mountPath: /etc/config-eventlistener
         env:
         - name: SYSTEM_NAMESPACE
           valueFrom:
@@ -60,3 +62,6 @@ spec:
         - name: config-logging
           configMap:
             name: config-logging-triggers
+        - name: config-eventlistener
+          configMap:
+            name: config-eventlistener-triggers

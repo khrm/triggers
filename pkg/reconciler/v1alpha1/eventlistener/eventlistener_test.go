@@ -312,7 +312,7 @@ func Test_reconcileDeployment(t *testing.T) {
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
-										Name: eventListenerConfigMapName,
+										Name: eventListenerLoggingConfigMapName,
 									},
 								},
 							},
@@ -545,7 +545,7 @@ func TestReconcile(t *testing.T) {
 						VolumeSource: corev1.VolumeSource{
 							ConfigMap: &corev1.ConfigMapVolumeSource{
 								LocalObjectReference: corev1.LocalObjectReference{
-									Name: eventListenerConfigMapName,
+									Name: eventListenerLoggingConfigMapName,
 								},
 							},
 						},

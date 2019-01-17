@@ -20,6 +20,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
+	"os"
 	"reflect"
 	"strconv"
 
@@ -38,6 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/cache"
 
+	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
 )
 
@@ -47,12 +50,24 @@ const (
 	// eventListenerControllerName defines name for EventListener Controller
 	eventListenerControllerName = "EventListener"
 	// eventListenerConfigMapName is for the automatically created ConfigMap
-	eventListenerConfigMapName = "config-logging-triggers"
+	eventListenerConfigMapName = "/etc/config-eventlistener"
+	// eventListenerLoggingConfigMapName is for the automatically created ConfigMap
+	eventListenerLoggingConfigMapName = "config-logging-triggers"
 	// eventListenerServicePortName defines service port name for EventListener Service
 	eventListenerServicePortName = "http-listener"
 	// GeneratedResourcePrefix is the name prefix for resources generated in the
 	// EventListener reconciler
 	GeneratedResourcePrefix = "el"
+	// EventListenerMode determines whether deployment is global, namespaces or isolated
+	EventListenerMode = "mode"
+	// EventListenerGlobal determines that deployment should be global
+	EventListenerGlobal = "global"
+	// EventListenerNamespaced determines that deployment should be namespaced
+	EventListenerNamespaced = "namespaced"
+	// EventListenerIsolated determines that deployment should be isolated
+	EventListenerIsolated = "isolated"
+	// ControllerNSEnv points to the Namespace of Controller
+	ControllerNSEnv = "SYSTEM_NAMESPACE"
 
 	defaultConfig = `{"level": "info","development": false,"sampling": {"initial": 100,"thereafter": 100},"outputPaths": ["stdout"],"errorOutputPaths": ["stderr"],"encoding": "json","encoderConfig": {"timeKey": "","levelKey": "level","nameKey": "logger","callerKey": "caller","messageKey": "msg","stacktraceKey": "stacktrace","lineEnding": "","levelEncoder": "","timeEncoder": "","durationEncoder": "","callerEncoder": ""}}`
 )
@@ -105,7 +120,7 @@ func (c *Reconciler) Reconcile(ctx context.Context, key string) (returnError err
 		if len(cfgs) > 0 {
 			return nil
 		}
-		err = c.KubeClientSet.CoreV1().ConfigMaps(namespace).Delete(eventListenerConfigMapName, &metav1.DeleteOptions{})
+		err = c.KubeClientSet.CoreV1().ConfigMaps(namespace).Delete(eventListenerLoggingConfigMapName, &metav1.DeleteOptions{})
 		if errors.IsNotFound(err) {
 			return nil
 		}
@@ -166,6 +181,11 @@ func reconcileObjectMeta(oldMeta *metav1.ObjectMeta, newMeta metav1.ObjectMeta) 
 }
 
 func (c *Reconciler) reconcileService(el *v1alpha1.EventListener) error {
+	mode := getEventListenerMode()
+	if mode == EventListenerGlobal || mode == EventListenerNamespaced {
+		c.Logger.Info("el mode:", mode)
+	}
+
 	service := &corev1.Service{
 		ObjectMeta: generateObjectMeta(el),
 		Spec: corev1.ServiceSpec{
@@ -228,7 +248,7 @@ func (c *Reconciler) reconcileService(el *v1alpha1.EventListener) error {
 }
 
 func (c *Reconciler) reconcileLoggingConfig(el *v1alpha1.EventListener) error {
-	_, err := c.KubeClientSet.CoreV1().ConfigMaps(el.Namespace).Get(eventListenerConfigMapName, metav1.GetOptions{})
+	_, err := c.KubeClientSet.CoreV1().ConfigMaps(el.Namespace).Get(eventListenerLoggingConfigMapName, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		// create default config-logging ConfigMap
 		_, err = c.KubeClientSet.CoreV1().ConfigMaps(el.Namespace).Create(defaultLoggingConfigMap())
@@ -237,7 +257,7 @@ func (c *Reconciler) reconcileLoggingConfig(el *v1alpha1.EventListener) error {
 			return err
 		}
 	} else if err != nil {
-		c.Logger.Errorf("Error retrieving ConfigMap %q: %s", eventListenerConfigMapName, err)
+		c.Logger.Errorf("Error retrieving ConfigMap %q: %s", eventListenerLoggingConfigMapName, err)
 		return err
 	}
 	return nil
@@ -251,7 +271,19 @@ func (c *Reconciler) reconcileDeployment(el *v1alpha1.EventListener) error {
 		return err
 	}
 
-	labels := mergeLabels(el.Labels, GenerateResourceLabels(el.Name))
+	mode := getEventListenerMode()
+	depName := el.Name
+	depNS := el.Namespace
+	if mode == EventListenerGlobal {
+		depName = eventListenerControllerName + EventListenerGlobal
+		depNS = os.Getenv(ControllerNSEnv)
+		c.Logger.Info("el mode:", mode, " ns", depNS)
+	} else if mode == EventListenerNamespaced {
+		depName = eventListenerControllerName + "-" + EventListenerNamespaced + "-" + el.Namespace
+		depNS = el.Namespace
+	}
+
+	labels := mergeLabels(el.Labels, GenerateResourceLabels(depName))
 	var replicas int32 = 1
 	container := corev1.Container{
 		Name:  "event-listener",
@@ -261,8 +293,8 @@ func (c *Reconciler) reconcileDeployment(el *v1alpha1.EventListener) error {
 			Protocol:      corev1.ProtocolTCP,
 		}},
 		Args: []string{
-			"-el-name", el.Name,
-			"-el-namespace", el.Namespace,
+			"-el-name", depName,
+			"-el-namespace", depNS,
 			"-port", strconv.Itoa(*ElPort),
 		},
 		VolumeMounts: []corev1.VolumeMount{{
@@ -298,7 +330,7 @@ func (c *Reconciler) reconcileDeployment(el *v1alpha1.EventListener) error {
 						VolumeSource: corev1.VolumeSource{
 							ConfigMap: &corev1.ConfigMapVolumeSource{
 								LocalObjectReference: corev1.LocalObjectReference{
-									Name: eventListenerConfigMapName,
+									Name: eventListenerLoggingConfigMapName,
 								},
 							},
 						},
@@ -432,10 +464,18 @@ func listenerHostname(name, namespace string, port int) string {
 
 func defaultLoggingConfigMap() *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: eventListenerConfigMapName},
+		ObjectMeta: metav1.ObjectMeta{Name: eventListenerLoggingConfigMapName},
 		Data: map[string]string{
 			"loglevel.eventlistener": "info",
 			"zap-logger-config":      defaultConfig,
 		},
 	}
+}
+
+func getEventListenerMode() string {
+	cm, err := configmap.Load(eventListenerConfigMapName)
+	if err != nil {
+		log.Fatalf("Error loading eventlistener configuration: %v", err)
+	}
+	return cm[EventListenerMode]
 }
