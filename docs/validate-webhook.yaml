@@ -1,0 +1,27 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: validate-webhook
+spec:
+  inputs:
+    params:
+      - name: Payload
+        description: Payload of Event Received
+      - name: X-Hub-Signature
+        description: Hash of the Request Received
+      - name: Github-Secret
+        description: Secret used to configure webhook
+  steps:
+    - name: validate
+      image: quay.io/khrm/trigger-validate
+      command: ["/validate-webhook"]
+      env:
+        - name: Payload
+          value: $(inputs.params.Payload)
+        - name: X-Hub-Signature
+          value: $(inputs.params.X-Hub-Signature)
+        - name: Github-Secret
+          valueFrom:
+           secretKeyRef:
+             name: github
+             key: github-secret
