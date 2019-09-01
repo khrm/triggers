@@ -18,12 +18,18 @@ package sink
 
 import (
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"path"
+	"time"
 
+	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
+	pipelineclientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
+	triggersv1 "github.com/tektoncd/triggers/pkg/apis/triggers/v1alpha1"
 	triggersclientset "github.com/tektoncd/triggers/pkg/client/clientset/versioned"
+
 	"github.com/tektoncd/triggers/pkg/template"
 	"github.com/tidwall/gjson"
 	"golang.org/x/xerrors"
@@ -36,9 +42,14 @@ type Resource struct {
 	TriggersClient         triggersclientset.Interface
 	DiscoveryClient        discoveryclient.DiscoveryInterface
 	RESTClient             restclient.Interface
+	PipelineClient         pipelineclientset.Interface
 	EventListenerName      string
 	EventListenerNamespace string
 }
+
+const (
+	validateTaskWait = 20 * time.Second
+)
 
 func (r Resource) HandleEvent(response http.ResponseWriter, request *http.Request) {
 	el, err := r.TriggersClient.TektonV1alpha1().EventListeners(r.EventListenerNamespace).Get(r.EventListenerName, metav1.GetOptions{})
@@ -55,6 +66,14 @@ func (r Resource) HandleEvent(response http.ResponseWriter, request *http.Reques
 
 	// Execute each Trigger
 	for _, trigger := range el.Spec.Triggers {
+		// Secure Endpoint
+		if trigger.TriggerValidate != nil {
+			if err := r.secureEndpoint(trigger, request.Header, event); err != nil {
+				log.Printf("Error securing Endpoint for TriggerBinding %s in Namespace %s: %s", trigger.TriggerBinding.Name, r.EventListenerNamespace, err)
+				continue
+			}
+		}
+
 		binding, err := template.ResolveBinding(trigger,
 			r.TriggersClient.TektonV1alpha1().TriggerBindings(r.EventListenerNamespace).Get,
 			r.TriggersClient.TektonV1alpha1().TriggerTemplates(r.EventListenerNamespace).Get)
@@ -135,4 +154,65 @@ func createRequestURI(apiVersion, namePlural, namespace string) string {
 	}
 	uri = path.Join(uri, namePlural)
 	return uri
+}
+
+func (r Resource) secureEndpoint(trigger triggersv1.Trigger, headers http.Header, payload []byte) error {
+
+	params := []pipelinev1.Param{}
+
+	params = append(params, trigger.TriggerValidate.Params...)
+	params = append(params, pipelinev1.Param{
+		Name: "Payload",
+		Value: pipelinev1.ArrayOrString{
+			Type:      pipelinev1.ParamTypeArray,
+			StringVal: string(payload),
+		},
+	})
+
+	for key := range headers {
+		params = append(params, pipelinev1.Param{
+			Name: key,
+			Value: pipelinev1.ArrayOrString{
+				Type:      pipelinev1.ParamTypeString,
+				StringVal: headers.Get(key),
+			},
+		})
+	}
+
+	tr := &pipelinev1.TaskRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:    r.EventListenerNamespace,
+			GenerateName: trigger.TriggerValidate.TaskRef.Name,
+		},
+		Spec: pipelinev1.TaskRunSpec{
+			Inputs: pipelinev1.TaskRunInputs{
+				Params: params,
+			},
+			TaskRef:        trigger.TriggerValidate.TaskRef,
+			ServiceAccount: trigger.TriggerValidate.ServiceAccount,
+		},
+	}
+
+	tr, err := r.PipelineClient.TektonV1alpha1().TaskRuns(r.EventListenerNamespace).Create(tr)
+	if err != nil {
+		return err
+	}
+
+	for {
+		tr, err := r.PipelineClient.TektonV1alpha1().TaskRuns(r.EventListenerNamespace).Get(tr.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		if tr.IsSuccessful() {
+			break
+		}
+
+		time.Sleep(validateTaskWait)
+
+		if tr.IsDone() && !tr.IsSuccessful() {
+			return errors.New("validation taskrun failed")
+		}
+	}
+	return nil
 }

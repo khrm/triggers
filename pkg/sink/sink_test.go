@@ -19,6 +19,7 @@ package sink
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -26,15 +27,25 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
+	fakepipelineclientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/fake"
+	pipelinetest "github.com/tektoncd/pipeline/test"
+	pipelinetb "github.com/tektoncd/pipeline/test/builder"
 	triggersv1 "github.com/tektoncd/triggers/pkg/apis/triggers/v1alpha1"
 	faketriggersclientset "github.com/tektoncd/triggers/pkg/client/clientset/versioned/fake"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakekubeclientset "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	restclient "k8s.io/client-go/rest"
 	fakerestclient "k8s.io/client-go/rest/fake"
+	k8stest "k8s.io/client-go/testing"
+	apis "knative.dev/pkg/apis"
+	rtesting "knative.dev/pkg/reconciler/testing"
 )
 
 func Test_createRequestURI(t *testing.T) {
@@ -382,5 +393,119 @@ func Test_HandleEvent(t *testing.T) {
 
 	if numRequests != 1 {
 		t.Errorf("Expected 1 request, got %d requests", numRequests)
+	}
+}
+
+func TestResource_secureEndpoint(t *testing.T) {
+
+	h := http.Header{}
+
+	r := Resource{
+		EventListenerName:      "foo-listener",
+		EventListenerNamespace: "foo",
+	}
+
+	trigger := triggersv1.Trigger{
+		TriggerValidate: &triggersv1.TriggerValidate{
+			TaskRef: &pipelinev1.TaskRef{
+				Name: "bar",
+			},
+			ServiceAccount: "foo",
+		},
+	}
+
+	h.Set("github", "X-Hub-Signature")
+
+	tests := []struct {
+		pClient *fakepipelineclientset.Clientset
+		name    string
+		wantErr bool
+	}{
+		{
+			name: "Test_SecureEndpoint",
+			pClient: func() *fakepipelineclientset.Clientset {
+				// We put the succeeded taskrun in the pipeline
+				tr := pipelinetb.TaskRun("bar-random", "foo", pipelinetb.TaskRunStatus(pipelinetb.StatusCondition(
+					apis.Condition{
+						Type:   apis.ConditionSucceeded,
+						Status: corev1.ConditionTrue,
+					},
+				)))
+				ctx, _ := rtesting.SetupFakeContext(t)
+				clients, _ := pipelinetest.SeedTestData(t, ctx, pipelinetest.Data{
+					TaskRuns: []*pipelinev1.TaskRun{tr},
+				})
+				pClient := clients.Pipeline
+				// We add a prependreactor which just return the value and doesn't insert
+				pClient.PrependReactor("create", "taskruns",
+					func(action k8stest.Action) (bool, runtime.Object, error) {
+						create := action.(k8stest.CreateActionImpl)
+						obj := create.GetObject().(*v1alpha1.TaskRun)
+						obj.Name = "bar-random"
+						return true, obj, nil
+					})
+				return pClient
+			}(),
+		},
+		{
+			name: "Test_SecureEndpoint_ValidationFailure",
+			pClient: func() *fakepipelineclientset.Clientset {
+				// We put the succeeded taskrun in the pipeline
+				tr := pipelinetb.TaskRun("bar-random", "foo", pipelinetb.TaskRunStatus(pipelinetb.StatusCondition(
+					apis.Condition{
+						Type:   apis.ConditionSucceeded,
+						Status: corev1.ConditionFalse,
+					},
+				)))
+				ctx, _ := rtesting.SetupFakeContext(t)
+				clients, _ := pipelinetest.SeedTestData(t, ctx, pipelinetest.Data{
+					TaskRuns: []*pipelinev1.TaskRun{tr},
+				})
+				pClient := clients.Pipeline
+				// We add a prependreactor which just return the value and doesn't insert
+				pClient.PrependReactor("create", "taskruns",
+					func(action k8stest.Action) (bool, runtime.Object, error) {
+						create := action.(k8stest.CreateActionImpl)
+						obj := create.GetObject().(*v1alpha1.TaskRun)
+						obj.Name = "bar-random"
+						return true, obj, nil
+					})
+				return pClient
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "Test_SecureEndpoint_TaskrunCreateFailure",
+			pClient: func() *fakepipelineclientset.Clientset {
+				pClient := fakepipelineclientset.NewSimpleClientset()
+				pClient.PrependReactor("create", "taskruns",
+					func(action k8stest.Action) (bool, runtime.Object, error) {
+						return true, nil, errors.New("mock create taskrun error")
+					})
+				return pClient
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "Test_SecureEndpoint_TaskrunGetFailure",
+			pClient: func() *fakepipelineclientset.Clientset {
+				pClient := fakepipelineclientset.NewSimpleClientset()
+				pClient.PrependReactor("get", "taskruns",
+					func(action k8stest.Action) (bool, runtime.Object, error) {
+						return true, nil, errors.New("mock create taskrun error")
+					})
+				return pClient
+			}(),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r.PipelineClient = tt.pClient
+			if err := r.secureEndpoint(trigger, h, []byte("test payload")); (err != nil) != tt.wantErr {
+				t.Errorf("Resource.secureEndpoint() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
