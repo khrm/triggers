@@ -44,9 +44,9 @@ type Trigger struct {
 
 // TriggerValidate represents the image to run taskrun for validating that trigger comes from the source which is desired
 type TriggerValidate struct {
-	TaskRef        *pipelinev1.TaskRef `json:"taskRef"`
-	ServiceAccount string              `json:"serviceAccount,omitempty"`
-	Params         []pipelinev1.Param  `json:"params,omitempty"`
+	TaskRef            pipelinev1.TaskRef `json:"taskRef"`
+	ServiceAccountName string             `json:"serviceAccountName"`
+	Params             []pipelinev1.Param `json:"params,omitempty"`
 }
 
 // TriggerBindingRef refers to a particular TriggerBinding resource.

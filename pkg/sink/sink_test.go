@@ -396,7 +396,7 @@ func Test_HandleEvent(t *testing.T) {
 	}
 }
 
-func TestResource_secureEndpoint(t *testing.T) {
+func TestResource_validateEvent(t *testing.T) {
 
 	h := http.Header{}
 
@@ -405,20 +405,22 @@ func TestResource_secureEndpoint(t *testing.T) {
 		EventListenerNamespace: "foo",
 	}
 
-	trigger := triggersv1.Trigger{
-		TriggerValidate: &triggersv1.TriggerValidate{
-			TaskRef: &pipelinev1.TaskRef{
-				Name: "bar",
-			},
-			ServiceAccount: "foo",
+	triggerValidate := &triggersv1.TriggerValidate{
+		TaskRef: pipelinev1.TaskRef{
+			Name: "bar",
 		},
+		ServiceAccountName: "foo",
 	}
+	task := pipelinetb.Task("bar", "foo", pipelinetb.TaskSpec(
+		pipelinetb.TaskInputs(
+			pipelinetb.InputsParamSpec("param", v1alpha1.ParamTypeString, pipelinetb.ParamSpecDescription("mydesc"), pipelinetb.ParamSpecDefault("default")),
+			pipelinetb.InputsParamSpec("array-param", v1alpha1.ParamTypeString, pipelinetb.ParamSpecDescription("desc"), pipelinetb.ParamSpecDefault("array", "values")))))
 
 	h.Set("github", "X-Hub-Signature")
 
 	tests := []struct {
-		pClient *fakepipelineclientset.Clientset
 		name    string
+		pClient *fakepipelineclientset.Clientset
 		wantErr bool
 	}{
 		{
@@ -433,6 +435,7 @@ func TestResource_secureEndpoint(t *testing.T) {
 				)))
 				ctx, _ := rtesting.SetupFakeContext(t)
 				clients, _ := pipelinetest.SeedTestData(t, ctx, pipelinetest.Data{
+					Tasks:    []*pipelinev1.Task{task},
 					TaskRuns: []*pipelinev1.TaskRun{tr},
 				})
 				pClient := clients.Pipeline
@@ -459,6 +462,7 @@ func TestResource_secureEndpoint(t *testing.T) {
 				)))
 				ctx, _ := rtesting.SetupFakeContext(t)
 				clients, _ := pipelinetest.SeedTestData(t, ctx, pipelinetest.Data{
+					Tasks:    []*pipelinev1.Task{task},
 					TaskRuns: []*pipelinev1.TaskRun{tr},
 				})
 				pClient := clients.Pipeline
@@ -477,7 +481,11 @@ func TestResource_secureEndpoint(t *testing.T) {
 		{
 			name: "Test_SecureEndpoint_TaskrunCreateFailure",
 			pClient: func() *fakepipelineclientset.Clientset {
-				pClient := fakepipelineclientset.NewSimpleClientset()
+				ctx, _ := rtesting.SetupFakeContext(t)
+				clients, _ := pipelinetest.SeedTestData(t, ctx, pipelinetest.Data{
+					Tasks: []*pipelinev1.Task{task},
+				})
+				pClient := clients.Pipeline
 				pClient.PrependReactor("create", "taskruns",
 					func(action k8stest.Action) (bool, runtime.Object, error) {
 						return true, nil, errors.New("mock create taskrun error")
@@ -489,7 +497,11 @@ func TestResource_secureEndpoint(t *testing.T) {
 		{
 			name: "Test_SecureEndpoint_TaskrunGetFailure",
 			pClient: func() *fakepipelineclientset.Clientset {
-				pClient := fakepipelineclientset.NewSimpleClientset()
+				ctx, _ := rtesting.SetupFakeContext(t)
+				clients, _ := pipelinetest.SeedTestData(t, ctx, pipelinetest.Data{
+					Tasks: []*pipelinev1.Task{task},
+				})
+				pClient := clients.Pipeline
 				pClient.PrependReactor("get", "taskruns",
 					func(action k8stest.Action) (bool, runtime.Object, error) {
 						return true, nil, errors.New("mock create taskrun error")
@@ -503,7 +515,7 @@ func TestResource_secureEndpoint(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r.PipelineClient = tt.pClient
-			if err := r.secureEndpoint(trigger, h, []byte("test payload")); (err != nil) != tt.wantErr {
+			if err := r.validateEvent(triggerValidate, h, []byte("test payload")); (err != nil) != tt.wantErr {
 				t.Errorf("Resource.secureEndpoint() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})

@@ -10,9 +10,9 @@ spec:
       - name: X-Hub-Signature
         description: Hash of the Request Received
       - name: Github-Secret
-        description: Secret used to configure webhook
+        description: Secret name used to configure webhook
       - name: Github-Secret-Key
-        description: Secret used to configure webhook
+        description: Secret key used to configured webhook
   steps:
     - name: validate
       image: python:alpine

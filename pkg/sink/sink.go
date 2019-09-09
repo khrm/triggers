@@ -23,6 +23,7 @@ import (
 	"log"
 	"net/http"
 	"path"
+	"sync"
 	"time"
 
 	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
@@ -48,7 +49,9 @@ type Resource struct {
 }
 
 const (
-	validateTaskWait = 20 * time.Second
+	// TBD: To be configurable in future
+	taskRunPollingInterval = 60 * time.Second
+	taskRunPollingRetries  = 5
 )
 
 func (r Resource) HandleEvent(response http.ResponseWriter, request *http.Request) {
@@ -64,32 +67,43 @@ func (r Resource) HandleEvent(response http.ResponseWriter, request *http.Reques
 		return
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(len(el.Spec.Triggers))
+	header := request.Header
+
 	// Execute each Trigger
 	for _, trigger := range el.Spec.Triggers {
-		// Secure Endpoint
-		if trigger.TriggerValidate != nil {
-			if err := r.secureEndpoint(trigger, request.Header, event); err != nil {
-				log.Printf("Error securing Endpoint for TriggerBinding %s in Namespace %s: %s", trigger.TriggerBinding.Name, r.EventListenerNamespace, err)
-				continue
-			}
-		}
+		go r.executeTrigger(event, header, trigger, &wg)
+	}
+	wg.Wait()
+}
 
-		binding, err := template.ResolveBinding(trigger,
-			r.TriggersClient.TektonV1alpha1().TriggerBindings(r.EventListenerNamespace).Get,
-			r.TriggersClient.TektonV1alpha1().TriggerTemplates(r.EventListenerNamespace).Get)
-		if err != nil {
-			log.Print(err)
-			continue
+func (r Resource) executeTrigger(payload []byte, header http.Header, trigger triggersv1.Trigger, wg *sync.WaitGroup) {
+	defer wg.Done()
+	// Secure Endpoint
+	if trigger.TriggerValidate != nil {
+		if err := r.validateEvent(trigger.TriggerValidate, header, payload); err != nil {
+			log.Printf("Error securing Endpoint for TriggerBinding %s in Namespace %s: %s", trigger.TriggerBinding.Name, r.EventListenerNamespace, err)
+			return
 		}
-		resources, err := template.NewResources(event, binding)
-		if err != nil {
-			log.Print(err)
-			continue
-		}
-		err = createResources(resources, r.RESTClient, r.DiscoveryClient)
-		if err != nil {
-			log.Print(err)
-		}
+	}
+
+	binding, err := template.ResolveBinding(trigger,
+		r.TriggersClient.TektonV1alpha1().TriggerBindings(r.EventListenerNamespace).Get,
+		r.TriggersClient.TektonV1alpha1().TriggerTemplates(r.EventListenerNamespace).Get)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	resources, err := template.NewResources(payload, binding)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	err = createResources(resources, r.RESTClient, r.DiscoveryClient)
+	if err != nil {
+		log.Print(err)
+		return
 	}
 }
 
@@ -156,49 +170,18 @@ func createRequestURI(apiVersion, namePlural, namespace string) string {
 	return uri
 }
 
-func (r Resource) secureEndpoint(trigger triggersv1.Trigger, headers http.Header, payload []byte) error {
-
-	params := []pipelinev1.Param{}
-
-	params = append(params, trigger.TriggerValidate.Params...)
-	params = append(params, pipelinev1.Param{
-		Name: "Payload",
-		Value: pipelinev1.ArrayOrString{
-			Type:      pipelinev1.ParamTypeArray,
-			StringVal: string(payload),
-		},
-	})
-
-	for key := range headers {
-		params = append(params, pipelinev1.Param{
-			Name: key,
-			Value: pipelinev1.ArrayOrString{
-				Type:      pipelinev1.ParamTypeString,
-				StringVal: headers.Get(key),
-			},
-		})
+func (r Resource) validateEvent(triggerValidate *triggersv1.TriggerValidate, headers http.Header, payload []byte) error {
+	tr, err := r.createValidateTask(triggerValidate, headers, payload)
+	if err != nil {
+		return nil
 	}
 
-	tr := &pipelinev1.TaskRun{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:    r.EventListenerNamespace,
-			GenerateName: trigger.TriggerValidate.TaskRef.Name,
-		},
-		Spec: pipelinev1.TaskRunSpec{
-			Inputs: pipelinev1.TaskRunInputs{
-				Params: params,
-			},
-			TaskRef:        trigger.TriggerValidate.TaskRef,
-			ServiceAccount: trigger.TriggerValidate.ServiceAccount,
-		},
-	}
-
-	tr, err := r.PipelineClient.TektonV1alpha1().TaskRuns(r.EventListenerNamespace).Create(tr)
+	tr, err = r.PipelineClient.TektonV1alpha1().TaskRuns(r.EventListenerNamespace).Create(tr)
 	if err != nil {
 		return err
 	}
 
-	for {
+	for i := taskRunPollingRetries; i >= 0; i-- {
 		tr, err := r.PipelineClient.TektonV1alpha1().TaskRuns(r.EventListenerNamespace).Get(tr.Name, metav1.GetOptions{})
 		if err != nil {
 			return err
@@ -208,11 +191,74 @@ func (r Resource) secureEndpoint(trigger triggersv1.Trigger, headers http.Header
 			break
 		}
 
-		time.Sleep(validateTaskWait)
-
 		if tr.IsDone() && !tr.IsSuccessful() {
-			return errors.New("validation taskrun failed")
+			return errors.New("validation taskrun: " + tr.Name + " failed")
 		}
+
+		time.Sleep(taskRunPollingInterval)
 	}
 	return nil
+}
+
+func (r Resource) createValidateTask(triggerValidate *triggersv1.TriggerValidate,
+	headers http.Header, payload []byte) (*pipelinev1.TaskRun, error) {
+	// Checking whether task define in taskref exists or not
+	task, err := r.PipelineClient.TektonV1alpha1().Tasks(r.EventListenerNamespace).Get(triggerValidate.TaskRef.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	if task.Spec.Inputs == nil {
+		return nil, errors.New("parameters are mandatory for validate task")
+	}
+
+	params := []pipelinev1.Param{}
+	params = append(params, triggerValidate.Params...)
+	params = append(params, pipelinev1.Param{
+		Name: "Payload",
+		Value: pipelinev1.ArrayOrString{
+			Type:      pipelinev1.ParamTypeString,
+			StringVal: string(payload),
+		},
+	})
+
+	for _, v := range task.Spec.Inputs.Params {
+		h, ok := headers[v.Name]
+		if !ok {
+			continue
+		}
+		if v.Type == pipelinev1.ParamTypeArray {
+			params = append(params, pipelinev1.Param{
+				Name: v.Name,
+				Value: pipelinev1.ArrayOrString{
+					Type:     v.Type,
+					ArrayVal: h,
+				},
+			})
+		} else if v.Type == pipelinev1.ParamTypeString {
+			params = append(params, pipelinev1.Param{
+				Name: v.Name,
+				Value: pipelinev1.ArrayOrString{
+					Type:      v.Type,
+					StringVal: h[0],
+				},
+			})
+		}
+	}
+
+	return &pipelinev1.TaskRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:    r.EventListenerNamespace,
+			GenerateName: triggerValidate.TaskRef.Name,
+			Labels: map[string]string{triggersv1.GroupName +
+				triggersv1.EventListenerLabelKey: r.EventListenerName},
+		},
+		Spec: pipelinev1.TaskRunSpec{
+			Inputs: pipelinev1.TaskRunInputs{
+				Params: params,
+			},
+			TaskRef:        &triggerValidate.TaskRef,
+			ServiceAccount: triggerValidate.ServiceAccountName,
+		},
+	}, nil
 }
