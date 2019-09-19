@@ -1,6 +1,8 @@
 package builder
 
 import (
+	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
+	pipelinetb "github.com/tektoncd/pipeline/test/builder"
 	"github.com/tektoncd/triggers/pkg/apis/triggers/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -10,6 +12,12 @@ type EventListenerOp func(*v1alpha1.EventListener)
 
 // EventListenerSpecOp is an operation which modifies the EventListenerSpec.
 type EventListenerSpecOp func(*v1alpha1.EventListenerSpec)
+
+// EventListenerTriggerOp is an operation which modifies the EventListenerSpec.Trigger.
+type EventListenerTriggerOp func(*v1alpha1.Trigger)
+
+// EventListenerTriggerValidateOp is an operation which modifies the TriggerValidate.
+type EventListenerTriggerValidateOp func(*v1alpha1.TriggerValidate)
 
 // EventListener creates an EventListener with default values.
 // Any number of EventListenerOp modifiers can be passed to transform it.
@@ -61,18 +69,73 @@ func EventListenerServiceAccount(saName string) EventListenerSpecOp {
 }
 
 // EventListenerTrigger adds a Trigger to the EventListenerSpec Triggers.
-func EventListenerTrigger(tbName, ttName, apiVersion string) EventListenerSpecOp {
+func EventListenerTrigger(apiVersion string, ops ...EventListenerTriggerOp) EventListenerSpecOp {
 	return func(spec *v1alpha1.EventListenerSpec) {
-		spec.Triggers = append(spec.Triggers,
-			v1alpha1.Trigger{
-				TriggerBinding: v1alpha1.TriggerBindingRef{
-					Name:       tbName,
-					APIVersion: apiVersion,
-				},
-				TriggerTemplate: v1alpha1.TriggerTemplateRef{
-					Name:       ttName,
-					APIVersion: apiVersion,
-				},
-			})
+		trigger := &v1alpha1.Trigger{}
+		for _, op := range ops {
+			op(trigger)
+		}
+		spec.Triggers = append(spec.Triggers, *trigger)
+	}
+}
+
+// EventListenerTriggerBindingRef adds a TriggerBinding to the Triger in EventListenerSpec Triggers.
+func EventListenerTriggerBindingRef(tbName, apiVersion string) EventListenerTriggerOp {
+	return func(trigger *v1alpha1.Trigger) {
+		trigger.TriggerBinding = v1alpha1.TriggerBindingRef{
+			Name:       tbName,
+			APIVersion: apiVersion,
+		}
+	}
+}
+
+// EventListenerTriggerBindingRef adds a TriggerTemplate to the Triger in EventListenerSpec Triggers.
+func EventListenerTriggerTemplateRef(ttName, apiVersion string) EventListenerTriggerOp {
+	return func(trigger *v1alpha1.Trigger) {
+		trigger.TriggerTemplate = v1alpha1.TriggerTemplateRef{
+			Name:       ttName,
+			APIVersion: apiVersion,
+		}
+	}
+}
+
+// EventListenerTriggerValidate adds a TrjggerValidate to the Triger in EventListenerSpec Triggers.
+func EventListenerTriggerValidate(ops ...EventListenerTriggerValidateOp) EventListenerTriggerOp {
+	return func(trigger *v1alpha1.Trigger) {
+		validate := &v1alpha1.TriggerValidate{}
+		for _, op := range ops {
+			op(validate)
+		}
+		trigger.TriggerValidate = validate
+	}
+}
+
+// EventListenerTriggerValidateTaskRef adds a TaskRef to the TrigerValidate.
+func EventListenerTriggerValidateTaskRef(taskName, apiVersion string, kind pipelinev1.TaskKind) EventListenerTriggerValidateOp {
+	return func(validate *v1alpha1.TriggerValidate) {
+		validate.TaskRef = pipelinev1.TaskRef{
+			Name:       taskName,
+			Kind:       kind,
+			APIVersion: apiVersion,
+		}
+	}
+}
+
+// EventListenerTriggerServiceAccount adds a service account name to the TrigerValidate.
+func EventListenerTriggerValidateServiceAccount(serviceAccount string) EventListenerTriggerValidateOp {
+	return func(validate *v1alpha1.TriggerValidate) {
+		validate.ServiceAccountName = serviceAccount
+	}
+}
+
+// EventListenerTriggerValidateParam adds a param name to the TrigerValidate.
+func EventListenerTriggerValidateParam(name, value string) EventListenerTriggerValidateOp {
+	return func(validate *v1alpha1.TriggerValidate) {
+		validate.Params = append(validate.Params,
+			pipelinev1.Param{
+				Name:  name,
+				Value: *pipelinetb.ArrayOrString(value),
+			},
+		)
 	}
 }
