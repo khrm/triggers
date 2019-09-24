@@ -8,25 +8,27 @@ spec:
   inputs:
     params:
     - name: CreateCertificate
-      value: "true"
-    - name: CreateIngress
-      value: "true"
-    - name: CreateWebhook
       value: "false"
+    - name: CreateIngress
+      value: "false"
+    - name: CreateWebhook
+      value: "true"
     - name: CreateEventListener
       value: "true"
     - name: EventListenerName
       value: listener
     - name: CertificateKeyPassphrase
       value: pass1
+    - name: TriggerServiceAccount
+      value: tekton-triggers-example-sa
     - name: CertificateSecretName
       value: secret1
     - name: ExternalUrl
-      value: listener.192.168.0.1.nip.io
+      value: listener-test-triggers.apps.kbaig-007.devcluster.openshift.com
     - name: GithubOwner
-      value: tektoncd
+      value: khrm
     - name: GithubRepo
-      value: trigger
+      value: triggers
     - name: GithubSecretName
       value: githubsecret
     - name: GithubUrl

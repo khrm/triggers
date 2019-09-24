@@ -1,5 +1,5 @@
 # Create Webhook Tekton Task
-The create webhook task configures necessary componetns for the github webhook sending event to the event listener.
+The create webhook task configures necessary components for the github webhook sending event to the event listener.
 It configures following compoments:
 
 1. The github webhook
