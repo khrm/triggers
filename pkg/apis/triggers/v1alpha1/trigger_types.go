@@ -133,6 +133,8 @@ type InterceptorKind string
 const (
 	// ClusterInterceptorKind indicates that Interceptor type has a cluster scope.
 	ClusterInterceptorKind InterceptorKind = "ClusterInterceptor"
+	// NamespacedInterceptorKind indicated that interceptor has a namespaced scope
+	NamespacedInterceptorKind InterceptorKind = "NamespacedInterceptor"
 )
 
 func (ti *TriggerInterceptor) defaultInterceptorKind() {
