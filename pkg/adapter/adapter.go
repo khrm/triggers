@@ -48,7 +48,6 @@ import (
 	"knative.dev/eventing/pkg/adapter/v2"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	"knative.dev/pkg/controller"
-	"knative.dev/pkg/injection/clients/dynamicclient"
 	"knative.dev/pkg/logging"
 )
 
@@ -209,14 +208,12 @@ func (s *sinker) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Create EventListener Sink
 
-	dynamicClient := dynamicclient.Get(ctx)
+	// Create EventListener Sink
 
 	r := sink.Sink{
 		KubeClientSet:          kubeclient.Get(ctx),
 		DiscoveryClient:        s.Clients.DiscoveryClient,
-		DynamicClient:          dynamicClient,
 		TriggersClient:         s.Clients.TriggersClient,
 		HTTPClient:             clientObj,
 		CEClient:               s.Clients.CEClient,

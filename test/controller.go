@@ -45,7 +45,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	fakedynamic "k8s.io/client-go/dynamic/fake"
 	fakekubeclientset "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
@@ -59,7 +58,6 @@ import (
 	filteredinformerfactory "knative.dev/pkg/client/injection/kube/informers/factory/filtered"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/injection"
-	fakedynamicclientset "knative.dev/pkg/injection/clients/dynamicclient/fake"
 	rtesting "knative.dev/pkg/reconciler/testing"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
@@ -88,10 +86,9 @@ type Resources struct {
 
 // Clients holds references to clients which are useful for reconciler tests.
 type Clients struct {
-	Kube          *fakekubeclientset.Clientset
-	Triggers      *faketriggersclientset.Clientset
-	Pipeline      *fakepipelineclientset.Clientset
-	DynamicClient *fakedynamic.FakeDynamicClient
+	Kube     *fakekubeclientset.Clientset
+	Triggers *faketriggersclientset.Clientset
+	Pipeline *fakepipelineclientset.Clientset
 }
 
 // Assets holds references to the controller and clients.
@@ -108,7 +105,6 @@ func init() {
 		if err != nil {
 			panic(err.Error())
 		}
-		ctx, _ = fakedynamicclientset.With(ctx, scheme)
 		return ctx
 	})
 }
@@ -124,10 +120,9 @@ func SetupFakeContext(t testing.TB) (context.Context, []controller.Informer) {
 func SeedResources(t *testing.T, ctx context.Context, r Resources) Clients {
 	t.Helper()
 	c := Clients{
-		Kube:          fakekubeclient.Get(ctx),
-		Triggers:      faketriggersclient.Get(ctx),
-		Pipeline:      fakepipelineclient.Get(ctx),
-		DynamicClient: fakedynamicclientset.Get(ctx),
+		Kube:     fakekubeclient.Get(ctx),
+		Triggers: faketriggersclient.Get(ctx),
+		Pipeline: fakepipelineclient.Get(ctx),
 	}
 
 	// Teach Kube clients about the Tekton resources (needed by discovery client when creating resources)

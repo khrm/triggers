@@ -17,7 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"log"
 
 	"k8s.io/client-go/dynamic"
@@ -27,7 +26,6 @@ import (
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/injection"
-	"knative.dev/pkg/injection/clients/dynamicclient"
 	"knative.dev/pkg/signals"
 
 	"github.com/tektoncd/triggers/pkg/adapter"
@@ -48,7 +46,6 @@ func main() {
 	ctx = injection.WithConfig(ctx, cfg)
 
 	dc := dynamic.NewForConfigOrDie(cfg)
-	ctx = context.WithValue(ctx, dynamicclient.Key{}, dc)
 
 	sinkArgs, err := sink.GetArgs()
 	if err != nil {

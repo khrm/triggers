@@ -36,7 +36,6 @@ import (
 	filteredserviceinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/service/filtered"
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
-	"knative.dev/pkg/injection/clients/dynamicclient"
 	"knative.dev/pkg/logging"
 )
 
@@ -44,7 +43,6 @@ import (
 func NewController(config resources.Config) func(context.Context, configmap.Watcher) *controller.Impl {
 	return func(ctx context.Context, cmw configmap.Watcher) *controller.Impl {
 		logger := logging.FromContext(ctx)
-		dynamicclientset := dynamicclient.Get(ctx)
 		kubeclientset := kubeclient.Get(ctx)
 		triggersclientset := triggersclient.Get(ctx)
 		eventListenerInformer := eventlistenerinformer.Get(ctx)
@@ -52,7 +50,6 @@ func NewController(config resources.Config) func(context.Context, configmap.Watc
 		serviceInformer := filteredserviceinformer.Get(ctx, labels.FormatLabels(resources.DefaultStaticResourceLabels))
 
 		reconciler := &Reconciler{
-			DynamicClientSet:  dynamicclientset,
 			KubeClientSet:     kubeclientset,
 			TriggersClientSet: triggersclientset,
 			deploymentLister:  deploymentInformer.Lister(),
